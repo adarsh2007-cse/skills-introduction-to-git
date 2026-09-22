@@ -1,0 +1,230 @@
+# 🧱 Stack Overflown
+
+A developer-themed puzzle game that fuses **Tetris-style falling blocks** with **pattern-matching mechanics**. Instead of clearing horizontal lines, you stack falling "code blocks" to recreate 5×5 error patterns — such as *Null Pointer*, *Race Condition*, or *Infinite Loop* — before your stack overflows the board.
+
+![Status](https://img.shields.io/badge/status-playable-brightgreen)
+![Vanilla JS](https://img.shields.io/badge/built%20with-Vanilla%20JS-yellow)
+![No dependencies](https://img.shields.io/badge/dependencies-none-blue)
+
+---
+
+## Table of Contents
+
+- [Concept](#concept)
+- [Gameplay](#gameplay)
+- [Controls](#controls)
+- [Project Structure](#project-structure)
+- [Architecture](#architecture)
+  - [Rendering Pipeline](#rendering-pipeline)
+  - [Game Loop](#game-loop)
+  - [Piece System](#piece-system)
+  - [Pattern-Matching Engine](#pattern-matching-engine)
+- [Data Models](#data-models)
+- [Installation & Running Locally](#installation--running-locally)
+- [Configuration](#configuration)
+- [Known Issues & Limitations](#known-issues--limitations)
+- [Roadmap Ideas](#roadmap-ideas)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Concept
+
+Every classic programmer's nightmare — a stack overflow, a race condition, a null pointer dereference — becomes a literal puzzle piece in this game. Blocks fall from the top of a 10×20 grid (styled after a VS Code–dark editor theme), and your job is to arrange them so that a **5×5 sub-region of the board** matches the currently displayed **target error pattern**. Match it, and the board resets, your score climbs, and a new pattern is assigned.
+
+## Gameplay
+
+1. A random **piece** (single block, pair, square, triple, or "void" block) spawns at the top of the board.
+2. You move, rotate, and drop the piece to build up the stack.
+3. After every piece locks into place, the board is scanned for a **5×5 window** that matches the current **target pattern** shown in the side panel.
+4. A match:
+   - Adds **+100** to your score
+   - **Clears the entire board**
+   - Assigns a new random target pattern
+5. The game ends when a newly spawned piece **immediately collides** with existing blocks (i.e., the stack reaches the top) — a fitting nod to a real *stack overflow*.
+
+### Piece Types
+
+| Shape | Description | Color Code |
+|---|---|---|
+| Single block | 1×1 | Bug red (`1`) |
+| Horizontal pair | 1×2 | Function cyan (`2`) |
+| Vertical pair | 2×1 | String orange (`3`) |
+| Square | 2×2 | Class purple (`4`) |
+| Horizontal triple | 1×3 | Variable yellow (`5`) |
+| Void block | 1×1 | Black / counts as empty (`8`) |
+| Void pair | 1×2 | Black / counts as empty (`8`) |
+
+> **Note:** "Void" blocks (color code `8`) are visually placed on the board but are treated as *empty space* during pattern matching — they exist purely as an obstacle/strategy mechanic.
+
+## Controls
+
+| Key | Action |
+|---|---|
+| `←` | Move piece left |
+| `→` | Move piece right |
+| `↓` | Soft drop (move down one row) |
+| `↑` | Rotate piece clockwise |
+| `Space` | Hard drop (instantly drop to the lowest valid position) |
+| `P` | Pause / resume |
+
+## Project Structure
+
+```
+stack-overflown/
+├── index.html       # Page markup, canvas elements, layout containers
+├── style.css         # Dev/editor-themed dark UI styling
+├── index.js          # Core game engine: loop, rendering, input, physics
+└── patterns.js        # ERROR_PATTERNS dataset (5x5 target pattern definitions)
+```
+
+| File | Responsibility |
+|---|---|
+| `index.html` | Defines the DOM: main game `<canvas>`, side panel (score, target pattern preview, controls), and the game-over overlay. Loads `patterns.js` before `index.js`. |
+| `style.css` | VS Code–inspired dark theme, responsive flex layout, game-over modal styling. |
+| `patterns.js` | Declares the global `ERROR_PATTERNS` array consumed by `index.js`. |
+| `index.js` | All game logic — state, rendering, collision detection, pattern matching, input handling. |
+
+## Architecture
+
+### Rendering Pipeline
+
+The game uses **two independent `<canvas>` elements**, each with its own 2D rendering context:
+
+- `#gameCanvas` (300×600, `BLOCK_SIZE = 30`) — the main 10×20 play field.
+- `#patternCanvas` (100×100, local `blockSize = 20`) — a small preview of the current 5×5 target pattern.
+
+`draw()` runs every animation frame and performs, in order:
+1. Clear the canvas (fill with the "empty" color).
+2. Draw all locked blocks from the `board` matrix.
+3. Draw the currently falling piece at `(currentX, currentY)`.
+4. Draw grid lines over the play field.
+
+`drawTargetPattern()` is called separately (only when the pattern changes) to render the side-panel preview.
+
+### Game Loop
+
+`index.js` uses a `requestAnimationFrame`-driven loop (`gameLoop(time)`) with delta-time–based gravity:
+
+```js
+dropCounter += deltaTime;
+if (dropCounter > dropInterval) {
+  moveDown();
+  dropCounter = 0;
+}
+```
+
+- `dropInterval` (default `1000` ms) controls fall speed.
+- The loop is skipped (no movement) while `gameOver` or `isPaused` is true, but rendering continues so the paused/ended state stays visible.
+
+### Piece System
+
+- Piece shapes are defined in `SHAPES` as 2D arrays of color codes.
+- `spawnPiece()` picks a random shape, deep-copies it (to avoid mutating the template on rotation), and centers it horizontally at the top of the board.
+- `checkCollision(piece, x, y)` is the single source of truth for validity — it's reused by movement, rotation, and hard-drop logic to check board boundaries and existing block overlap.
+- `rotate()` performs a **matrix transpose + row reversal** to rotate 90° clockwise, and only commits the rotation if the result doesn't collide.
+- `lockPiece()` writes the piece's cells into the persistent `board` matrix once it can no longer fall.
+
+### Pattern-Matching Engine
+
+This is the core mechanic differentiating the game from standard Tetris:
+
+1. **`ERROR_PATTERNS`** (in `patterns.js`) is an array of named 5×5 binary matrices (`1` = block required, `0` = must be empty), each representing a stylized visual of a coding bug (Null Pointer, Memory Leak, Off By One, Race Condition, Infinite Loop, Syntax Error, Type Mismatch).
+2. After every piece lock (`moveDown()` on collision, or `hardDrop()`), `checkPatternMatch()` slides a 5×5 window across every possible position on the 10×20 board.
+3. `matchesPattern(startRow, startCol)` compares each cell in that window against the target pattern — importantly, **void blocks (`8`) are treated as empty** (`cellValue !== 0 && cellValue !== 8`), so they can be used strategically to "cancel out" unwanted filled cells.
+4. On the first matching window found, `clearPattern()` wipes the **entire board** (not just the matched region), the score increases, and a new random target pattern is assigned via `setNewTargetPattern()`.
+
+> **Complexity note:** the scan is a brute-force O(ROWS × COLS × PATTERN_SIZE²) check performed once per lock — inexpensive at this board size (10×20, 5×5 window), but worth knowing if you plan to scale up board dimensions.
+
+## Data Models
+
+**Board:** a `ROWS × COLS` (20×10) 2D array of integers, where each cell is a color code (`0`–`8`) or `0` for empty.
+
+**Piece:** a 2D array of color codes representing the current falling shape, paired with `currentX` / `currentY` offsets on the board.
+
+**Target Pattern:**
+```js
+{
+  name: "Null Pointer",
+  pattern: [
+    [1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 1],
+    [1, 0, 1, 0, 1],
+    [1, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1],
+  ],
+}
+```
+
+## Installation & Running Locally
+
+No build tools, bundlers, or dependencies are required — this is pure HTML/CSS/vanilla JS.
+
+```bash
+git clone <your-repo-url>
+cd stack-overflown
+```
+
+Then simply open `index.html` in a browser, or serve it locally:
+
+```bash
+# Python 3
+python3 -m http.server 8000
+
+# Node (http-server)
+npx http-server .
+```
+
+Navigate to `http://localhost:8000`.
+
+## Configuration
+
+All tunable constants live at the top of `index.js`:
+
+| Constant | Default | Effect |
+|---|---|---|
+| `COLS` | `10` | Board width in cells |
+| `ROWS` | `20` | Board height in cells |
+| `BLOCK_SIZE` | `30` | Pixel size per cell on the main canvas |
+| `PATTERN_SIZE` | `5` | Dimensions of the target pattern window |
+| `dropInterval` | `1000` (ms) | Gravity speed — lower = faster fall |
+
+Adding a new error pattern is as simple as appending an object to `ERROR_PATTERNS` in `patterns.js` with a `name` and a `PATTERN_SIZE × PATTERN_SIZE` binary matrix.
+
+## Known Issues & Limitations
+
+- **Pattern match resets the entire board**, not just the matched region — this is a significant balance/design choice worth revisiting if partial-clear behavior is desired.
+- **No scoring for partial progress or piece placement** — points are only awarded on a full pattern match.
+- **No level progression** — `dropInterval` is static and doesn't increase with score or time.
+- **No next-piece preview**, making planning around specific shapes difficult.
+- **Rotation has no wall-kick logic** — rotations near the board edge that would collide are simply rejected rather than nudged into a valid position.
+- **First-match-found pattern scan** — if multiple 5×5 windows match simultaneously, only the first one encountered (top-left to bottom-right scan order) is cleared.
+- **No persistent high score** (e.g., via `localStorage`).
+- **No sound effects or music.**
+- No automated tests currently exist in the codebase.
+
+## Roadmap Ideas
+
+- [ ] Partial-region clearing instead of full-board reset
+- [ ] Increasing difficulty curve (faster `dropInterval` over time/score)
+- [ ] Next-piece preview panel
+- [ ] Local high-score persistence
+- [ ] Wall-kick rotation system
+- [ ] Sound effects for lock, match, and game-over events
+- [ ] Mobile/touch controls
+- [ ] Combo scoring for consecutive matches
+
+## Contributing
+
+Contributions are welcome. Suggested workflow:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/partial-clear`)
+3. Make your changes, keeping functions small and side-effect-scoped as in the existing style
+4. Test manually in-browser (no test suite currently exists — consider adding one!)
+5. Open a pull request describing the change and rationale
+
+## License
+
+No license file is currently included. Add one (e.g., MIT) before distributing or accepting external contributions.
